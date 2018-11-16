@@ -1,0 +1,240 @@
+#include <algotrader-util.afl>
+SetChartOptions(0,chartShowArrows|chartShowDates);
+_N(Title = StrFormat("{{NAME}} - {{INTERVAL}} {{DATE}} Open %g, Hi %g, Lo %g, Close %g (%.1f%%) {{VALUES}}", O, H, L, C, SelectedValue( ROC( C, 1 ) ) ));
+
+HaClose = (O + H + L + C)/4; 
+HaOpen = AMA( Ref( HaClose, -1 ), 0.5 ); 
+HaHigh = Max( H, Max( HaClose, HaOpen ) ); 
+HaLow = Min( L, Min( HaClose, HaOpen ) ); 
+xDiff = (HaHigh - Halow) * 10000;
+barcolor = IIf(HaClose >= HaOpen,colorBlack,colorWhite);
+PlotOHLC( HaOpen, HaHigh, HaLow, HaClose, "", barcolor, styleCandle );
+
+_SECTION_BEGIN("Upstox Plugin");
+//AFL to Fire Orders from Amibroker to Upstox/Zerodha Trader
+//Ensure U Subscribed to Plus Trading Plugin
+//Ensure Upstox Trader is Running and U Logged in to Upstox Plus
+//Enter Your Client ID and Order Details in Parameter Window
+//Enter Your Tgt Percent and SLoss Percent (Only Number) in Parameter Window
+//Enter Your Trade Symbol in the Parameter Window as same as it is in Upstox Ex:- ACC-EQ, NIFTY15MARFUT etc
+//This AFL will Place a Tgt and SL order after U take Long/Short Position
+//If Tgt Order Hits SL Order will be canceled and Vice Versa
+//Insert Ur Buy/Short (Not Sell) Condition in the Specified Place
+//Only Define Buy and Short..DoNot Define/assign Sell/Cover as it is assigned by this AFL based on Your Tgt/SLoss Percent.
+Buy=Sell=Short=Cover=0;
+BarN = ValueWhen(DateNum()!= Ref(DateNum(),-1),BarIndex());
+BarNo = IIf(IsEmpty(BarN),BarIndex()+1,BarIndex()-BarN+1);
+AT_DEBUG="ON";
+NVal = "DAY";
+AT_SQUARE_OFF_FLAG="ON";
+NClient = ParamStr("Upstox ClientId","199888");
+NQty = Param("Qty to Buy/Sell?",1,1,5000,1);
+NExch = AT_EXCHANGE="MARKET";
+NTrdSymbol = AT_SYMBOL;
+NProdType = AT_PRODUCT_TYPE;
+NOrdType = AT_ORDER_TYPE;
+
+ProfitPercent = Param("Target Percentage?",1,0.25,10,0.25);
+LossPercent = Param("Stop Loss Percentage?",1,0.25,10,0.25);
+PriceSlip = C*0.003; //For Calculating Trigger Price for SL Orders
+if (AT_EXCHANGE == "MCX")
+Decimal = 0;
+else
+Decimal = 1;
+FirstTradeTime=093000;
+SquareOffTime = 151500;
+TARGET = Param("Target (absolute)", 1, 1, 1000, 1);
+STOPLOSS = Param("Stoploss (absolute)", 1, 1, 1000, 1);
+TRAILING_STOPLOSS = Param("Trailing Stoploss (absolute)", 0, 0, 1000, 1);
+//-----------------------------------------------------------------\\
+//--Buy/Short Condition Starts Here---------\\
+
+printf("\nHaOpen : " + HaOpen );  
+printf("\nHaHigh : " + HaHigh );  
+printf("\nHaLow : " + HaLow );  
+printf("\nHaClose : " + HaClose );  
+
+Candles=param("Candles",1,1,5,1);
+periods=param("periods",40,10,200,10);
+
+Buy = Sum(HaClose >= HaOpen,Candles)==Candles AND HaOpen==HaLow AND C>EMA(C,periods);
+Cover= Buy;
+Short= Sum(HaClose <= HaOpen,Candles)==Candles AND HaOpen=HaHigh AND C<EMA(C,periods);
+Sell= Short;
+Buy = ExRem(Buy,Sell);
+Sell = ExRem(Sell,Buy);
+Short=ExRem(Short,Cover);
+Cover=ExRem(Cover,Short);
+
+printf("\nBuy : " + Buy );  
+printf("\nSell : " + Sell );  
+printf("\nShort : " + Short );  
+printf("\nCover : " + Cover );  
+
+Stoploss=param("SL",1,1,5,1);
+
+ApplyStop(Type=0,Mode=1,Amount=StopLoss);
+//--UR Buy/Short Condition Ends Here---------\\
+
+Buy = ExRem(Buy,Short);
+Short=ExRem(Short,Buy);
+
+BuyPrice = ValueWhen(Buy,C);
+BuyNum = Sum(Buy,BarNo);
+BuyBar = BarNo - ValueWhen(Buy,BarNo)+1;
+
+ShortPrice = ValueWhen(Short,C);
+ShortNum = Sum(Short,BarNo);
+ShortBar = BarNo - ValueWhen(Short,BarNo)+1;
+
+BTgtPrice = BuyPrice + (BuyPrice*(ProfitPercent/100));
+BSLPrice = BuyPrice - (BuyPrice*(LossPercent/100));
+
+STgtPrice = ShortPrice - (ShortPrice*(ProfitPercent/100));
+SSLPrice = ShortPrice + (ShortPrice*(LossPercent/100));
+
+BuyRefNo = StrFormat(Name())+"-Buy-"+NumToStr(BuyNum,1.0)+"-"+StrFormat(Now(1))+"-"+NumToStr(GetChartID(),1.0);
+ShortRefNo = StrFormat(Name())+"-Short-"+NumToStr(ShortNum,1.0)+"-"+StrFormat(Now(1))+"-"+NumToStr(GetChartID(),1.0);
+
+BuyTgtRefNo = StrFormat(Name())+"-BuyTgt-"+NumToStr(BuyNum,1.0)+"-"+StrFormat(Now(1))+"-"+NumToStr(GetChartID(),1.0);
+BuySLRefNo = StrFormat(Name())+"-BuySL-"+NumToStr(BuyNum,1.0)+"-"+StrFormat(Now(1))+"-"+NumToStr(GetChartID(),1.0);
+
+BuyString1=StaticVarGetText(StrFormat(Name())+"-Buy");
+BuyString2 = StrFormat(Name())+"-Buy-"+NumToStr(BuyNum)+"-"+NumToStr(GetChartID(),1.0);
+
+ShortString1=StaticVarGetText(StrFormat(Name())+"-Short");
+ShortString2 = StrFormat(Name())+"-Short-"+NumToStr(ShortNum)+"-"+NumToStr(GetChartID(),1.0);
+
+BTgtSell = Cross(C,BTgtPrice) AND BuyNum > 0;
+BSLSell = Cross(BSLPrice,C) AND BuyNum > 0;
+
+BTgtSell = ExRem(BTgtSell,Buy);
+BSLSell = ExRem(BSLSell,Buy);
+
+STgtBuy = Cross(STgtPrice,C) AND ShortNum > 0;
+SSLBuy = Cross(C,SSLPrice) AND ShortNum > 0;
+
+STgtBuy = ExRem(STgtBuy,Short);
+SSLBuy = ExRem(SSLBuy,Short);
+
+Sell = BTgtSell AND Sum(BSLSell,BuyBar)==0 AND BuyNum > 0 OR BSLSell AND Sum(BTgtSell,BuyBar)==0 AND BuyNum > 0;
+Cover = STgtBuy AND Sum(SSLBuy,ShortBar)==0 AND ShortNum > 0 OR SSLBuy AND Sum(STgtBuy,ShortBar)==0 AND ShortNum > 0;
+
+Sell = ExRem(Sell,Buy);
+Cover = ExRem(Cover,Short);
+
+SellNum = Sum(Sell,BarNo);
+CoverNum = Sum(Cover,BarNo);
+
+BuyTgtRefNo = StrFormat(Name())+"-BuyTgt-"+NumToStr(BuyNum,1.0)+"-"+StrFormat(Now(1))+"-"+NumToStr(GetChartID(),1.0);
+BuySLRefNo = StrFormat(Name())+"-BuySL-"+NumToStr(BuyNum,1.0)+"-"+StrFormat(Now(1))+"-"+NumToStr(GetChartID(),1.0);
+
+ShortTgtRefNo = StrFormat(Name())+"-ShortTgt-"+NumToStr(ShortNum,1.0)+"-"+StrFormat(Now(1))+"-"+NumToStr(GetChartID(),1.0);
+ShortSLRefNo = StrFormat(Name())+"-ShortSL-"+NumToStr(ShortNum,1.0)+"-"+StrFormat(Now(1))+"-"+NumToStr(GetChartID(),1.0);
+
+BuyTgtString1=StaticVarGetText(StrFormat(Name())+"-BuyTgt");
+BuyTgtString2 = StrFormat(Name())+"-BuyTgt-"+NumToStr(BuyNum)+"-"+NumToStr(GetChartID(),1.0);
+
+BuySLString1=StaticVarGetText(StrFormat(Name())+"-BuySL");
+BuySLString2 = StrFormat(Name())+"-BuySL-"+NumToStr(BuyNum)+"-"+NumToStr(GetChartID(),1.0);
+
+ShortTgtString1=StaticVarGetText(StrFormat(Name())+"-ShortTgt");
+ShortTgtString2 = StrFormat(Name())+"-ShortTgt-"+NumToStr(ShortNum)+"-"+NumToStr(GetChartID(),1.0);
+
+ShortSLString1=StaticVarGetText(StrFormat(Name())+"-ShortSL");
+ShortSLString2 = StrFormat(Name())+"-ShortSL-"+NumToStr(ShortNum)+"-"+NumToStr(GetChartID(),1.0);
+
+BuyCancel1=StaticVarGetText(StrFormat(Name())+"-BuyCancel");
+BuyCancel2 = StrFormat(Name())+"-BuyCancel-"+NumToStr(SellNum)+"-"+NumToStr(GetChartID(),1.0);
+
+ShortCancel1=StaticVarGetText(StrFormat(Name())+"-ShortCancel");
+ShortCancel2 = StrFormat(Name())+"-ShortCancel-"+NumToStr(CoverNum)+"-"+NumToStr(GetChartID(),1.0);
+STOPLOSS_PCT = Param("Stoploss percentage", 1, 0.01, 20, 1);
+if ( LastValue(Buy) AND BuyString1 != BuyString2)
+{
+tradeType = "BUY";
+stoploss = calculateStoplossTarget(tradeType, LastValue(BuyPrice,1), STOPLOSS_PCT);
+StaticVarSetText(StrFormat(Name())+"-Buy",BuyString2 );
+plus = CreateStaticObject("Nest.PlusApi");
+plus.SetObjectName(NClient);
+plus.placeOrderAdvancedNew(NExch, "EQ" , NTrdSymbol, "BUY", NProdType, NOrdType, NQty, LastValue(BuyPrice,1), 0, 0, AT_NA, 0, AT_NA, NClient, NVal,
+"CLI", 0, BuyRefNo, AT_NA, "co" , 0, stoploss, 0);
+StaticVarSetText(StrFormat(Name())+"-Buy",BuyString2 );}
+
+if ( LastValue(Short) AND ShortString1 != ShortString2)
+{
+tradeType = "SELL";
+stoploss = calculateStoplossTarget(tradeType, LastValue(ShortPrice,1), STOPLOSS_PCT);
+plus = CreateStaticObject("Nest.PlusApi");
+plus.SetObjectName(NClient);
+plus.placeOrderAdvancedNew(NExch, "EQ" , NTrdSymbol, "SELL", NProdType, NOrdType, NQty, LastValue(ShortPrice,1), 0, 0, AT_NA, 0, AT_NA, NClient, NVal,
+"CLI", 0, ShortRefNo, AT_NA, "co" , 0, stoploss, 0);
+StaticVarSetText(StrFormat(Name())+"-Short",ShortString2 );}
+
+if ( LastValue(Ref(Buy,-1)) AND BuyTgtString1 != BuyTgtString2)
+{
+tradeType = "SELL";
+stoploss = calculateStoplossTarget(tradeType, LastValue(Prec(BTgtPrice,Decimal),1), STOPLOSS_PCT);
+plus = CreateStaticObject("Nest.PlusApi");
+plus.SetObjectName(NClient);
+plus.placeOrderAdvancedNew(NExch, "EQ" , NTrdSymbol, "SELL", NProdType, NOrdType, NQty, LastValue(Prec(BTgtPrice,Decimal),1), 0, 0, AT_NA, 0, AT_NA, NClient, NVal,
+"CLI", 0, BuyTgtRefNo, AT_NA, "co" , 0, stoploss, 0);
+StaticVarSetText(StrFormat(Name())+"-BuyTgt",BuyTgtString2 );}
+
+if ( LastValue(Ref(Buy,-1)) AND BuySLString1 != BuySLString2)
+{
+tradeType = "SELL";
+stoploss = calculateStoplossTarget(tradeType, LastValue(Prec(BSLPrice-PriceSLip,Decimal),1), STOPLOSS_PCT);
+plus = CreateStaticObject("Nest.PlusApi");
+plus.SetObjectName(NClient);
+plus.placeOrderAdvancedNew(NExch, "EQ" , NTrdSymbol, "SELL", NProdType, NOrdType, NQty, LastValue(Prec(BSLPrice-PriceSLip,Decimal),1), 0, 0, AT_NA, 0, AT_NA, NClient, NVal,
+"CLI", 0, BuySLRefNo, AT_NA, "co" , 0, stoploss, 0);
+StaticVarSetText(StrFormat(Name())+"-BuySL",BuySLString2 );}
+
+if ( LastValue(Ref(Short,-1)) AND ShortTgtString1 != ShortTgtString2)
+{
+tradeType = "BUY";
+stoploss = calculateStoplossTarget(tradeType, LastValue(Prec(STgtPrice,Decimal),1), STOPLOSS_PCT);
+plus = CreateStaticObject("Nest.PlusApi");
+plus.SetObjectName(NClient);
+plus.placeOrderAdvancedNew(NExch, "EQ" , NTrdSymbol, "SELL", NProdType, NOrdType, NQty, LastValue(Prec(STgtPrice,Decimal),1), 0, 0, AT_NA, 0, AT_NA, NClient, NVal,
+"CLI", 0, ShortTgtRefNo, AT_NA, "co" , 0, stoploss, 0);
+StaticVarSetText(StrFormat(Name())+"-ShortTgt",ShortTgtString2 );}
+
+if ( LastValue(Ref(Short,-1)) AND ShortSLString1 != ShortSLString2)
+{
+tradeType = "BUY";
+stoploss = calculateStoplossTarget(tradeType, LastValue(Prec(SSLPrice+PriceSLip,Decimal),1), STOPLOSS_PCT);
+plus = CreateStaticObject("Nest.PlusApi");
+plus.SetObjectName(NClient);
+plus.placeOrderAdvancedNew(NExch, "EQ" , NTrdSymbol, tradeType, NProdType, NOrdType, NQty, LastValue(Prec(STgtPrice,Decimal),1), 0, 0, AT_NA, 0, AT_NA, NClient, NVal,
+"CLI", 0, ShortSLRefNo, AT_NA, "co" , 0, stoploss, 0);
+StaticVarSetText(StrFormat(Name())+"-ShortSL",ShortSLString2 );}
+
+if ( LastValue(Sell) AND LastValue(BTgtSell) AND BuyCancel1 != BuyCancel2)
+{plus = CreateStaticObject("Nest.PlusApi");
+plus.SetObjectName(NClient);
+plus.CancelOrder(BuySLRefNo);
+StaticVarSetText(StrFormat(Name())+"-BuyCancel",BuyCancel2 );}
+
+if ( LastValue(Sell) AND LastValue(BSLSell) AND BuyCancel1 != BuyCancel2)
+{plus = CreateStaticObject("Nest.PlusApi");
+plus.SetObjectName(NClient);
+plus.CancelOrder(BuyTgtRefNo);
+StaticVarSetText(StrFormat(Name())+"-BuyCancel",BuyCancel2 );}
+
+if ( LastValue(Cover) AND LastValue(STgtBuy) AND ShortCancel1 != ShortCancel2)
+{plus = CreateStaticObject("Nest.PlusApi");
+plus.SetObjectName(NClient);
+plus.CancelOrder(ShortSLRefNo);
+StaticVarSetText(StrFormat(Name())+"-ShortCancel",ShortCancel2 );}
+
+if ( LastValue(Cover) AND LastValue(SSLBuy) AND ShortCancel1 != ShortCancel2)
+{plus = CreateStaticObject("Nest.PlusApi");
+plus.SetObjectName(NClient);
+plus.CancelOrder(ShortTgtRefNo);
+StaticVarSetText(StrFormat(Name())+"-ShortCancel",ShortCancel2 );}
+
+PlotShapes( Buy * shapeUpArrow + Sell * shapeDownArrow + Short * shapeDownArrow +  Cover * shapeUpArrow , IIf( Buy, colorGreen,IIf(Short,colorRed,IIf(Sell,colorOrange, IIf(Cover,colorPaleGreen,colorBlack))) ),0,IIf(Buy OR Cover ,L,IIf(Sell OR Short ,H,C)), Offset=0 );
+
+_SECTION_END();
